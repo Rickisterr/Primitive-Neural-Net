@@ -2,6 +2,8 @@
 This module defines the entire network of nodes containing primitive
 functions that trains to update connections and embeddings. To use,
 import the `Network` class.
+
+FOR NOW, ONLY SUPPORTS SINGLE OPERAND (UNARY) DSL FUNCTIONS
 """
 import torch
 import torch.nn.functional as F
@@ -22,8 +24,42 @@ class Network:
     def __init__(self, hidden_dim=128, output_dim=64):
         self.embed_model = MatrixPairEmbedding(hidden_dim, output_dim)
 
+        self.current_input = None
+        self.current_output = None
+
         self.nodes = []
         self.nodes_embeds_flat = []
+
+    def _calculate_output_loss(
+        self,
+        node_output: torch.Tensor,
+        final_output: torch.Tensor,
+        alpha=10.0,
+        beta=1.0
+    ):
+        """
+        Calculates the supervised loss between the output at a node during training with the 
+        actual final output of the input-output pair in the dataset.
+
+        Args:
+            node_output (torch.Tensor): Output at a particular node.
+            final_output (torch.Tensor): Actual final output that the network should produce.
+            alpha (float): Weightage for mismatch in shape contributing to loss. Default is 10.
+            beta (float): Weight for mismatch in element values affecting loss. Default is 1.
+        """
+        shape_loss = torch.sum((
+            torch.tensor(node_output.shape, dtype=torch.float32)
+            - torch.tensor(final_output.shape, dtype=torch.float32)
+        ) ** 2)
+
+        min_h = min(node_output.shape[0], final_output.shape[0])
+        min_w = min(node_output.shape[1], final_output.shape[1])
+
+        value_loss = torch.mean((
+            node_output[:min_h, :min_w] - final_output[:min_h, :min_w]
+        ) ** 2)
+
+        return alpha * shape_loss + beta * value_loss
 
     def _find_next_node(self, embed: torch.Tensor, next_node_ids: list):
         """
@@ -73,14 +109,63 @@ class Network:
 
         return
 
-    def train_iter(self, input_mat, output_mat):
+    def train_iter(self, max_overfits=5):
         """
         One iteration of training the network with a single input-output
         pair of matrices. The input is processed through the network until
-        the loss calculated at each node starts increasing, at which point
-        the output is finalized, 
+        overfitting begins (loss starts increasing), at which point the 
+        output is finalized and the part of the network traversed is adjusted
+        by backpropagation according to the final calculated loss.
+
+        Currently uses hit and trial checking for next node since sample space
+        for primitive functions is relatively small.
 
         Args:
-            input_mat (_type_): _description_
-            output_mat (_type_): _description_
+            max_overfits (int): Number of overfits checked via loss before training stopped.
         """
+        if not isinstance(self.current_input, torch.Tensor):
+            raise TypeError(f"self.current_input must be of type `torch.Tensor`\
+                but is of type `{type(self.current_input)}`.")
+
+        if not isinstance(self.current_output, torch.Tensor):
+            raise TypeError(f"self.current_output must be of type `torch.Tensor`\
+                but is of type `{type(self.current_output)}`.")
+
+        prev_loss = 9999
+        overfits = 0
+        best_output = None
+        best_traversed_nodes = None
+        next_node_candidates = [idx for idx in range(len(self.nodes))]
+
+        # TODO: Check if clone() needed for input copy here (can original tensor be changed)
+        node_input = self.current_input
+        traversed_nodes = []
+
+        while overfits <= max_overfits:
+            candidate_loss = 9999
+            chosen_output, chosen_node = None, None
+
+            for cand_id in next_node_candidates:
+                cand_output = self.nodes[cand_id].forward(node_input)
+                loss = self._calculate_output_loss(cand_output, self.current_output)
+
+                if loss < candidate_loss:
+                    candidate_loss = loss
+                    chosen_output = cand_output
+                    chosen_node = self.nodes[cand_id]
+
+            node_input = chosen_output
+            traversed_nodes.append(chosen_node)
+
+            if candidate_loss >= prev_loss:
+                overfits += 1
+            else:
+                best_output = chosen_output
+                best_traversed_nodes = traversed_nodes
+                overfits = (overfits - 1) if overfits > 0 else 0
+
+        return (
+            best_traversed_nodes,
+            best_output,
+            self._calculate_output_loss(best_output, self.current_output)
+        )

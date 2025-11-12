@@ -135,7 +135,7 @@ class MatrixPairEmbedding:
 
         return input_mat
 
-    def step(self, input_mats: torch.Tensor, output_mats: torch.Tensor, train=True, pair_features=False):       # pylint: disable=C0301
+    def step(self, input_mat: torch.Tensor, output_mat: torch.Tensor, train=True, pair_features=False):       # pylint: disable=C0301
         """
         Processes one input-output matrix pair to fit to the model and returns the
         individual and paired feature embeddings of the input-output pair.
@@ -149,56 +149,53 @@ class MatrixPairEmbedding:
         Returns:
             torch.Tensor: Individual and compiled embeddings for an input-output matrix pair.
         """
-        input_mats = self._preprocess_data(input_mats)
-        output_mats = self._preprocess_data(output_mats)
+        input_mat = self._preprocess_data(input_mat)
+        output_mat = self._preprocess_data(output_mat)
 
-        if len(input_mats.shape) == 2:
-            input_mats = input_mats.unsqueeze(0).unsqueeze(0)
+        if len(input_mat.shape) == 2:
+            input_mat = input_mat.unsqueeze(0).unsqueeze(0)
         else:
-            raise IndexError(f"input_mats must be 2 dimensions, but has {len(input_mats.shape)}.")
+            raise IndexError(f"input_mat must be 2 dimensions, but has {len(input_mat.shape)}.")
 
-        if len(output_mats.shape) == 2:
-            output_mats = output_mats.unsqueeze(0).unsqueeze(0)
+        if len(output_mat.shape) == 2:
+            output_mat = output_mat.unsqueeze(0).unsqueeze(0)
         else:
-            raise IndexError(f"output_mats must be 2 dimensions, but has {len(input_mats.shape)}.")
+            raise IndexError(f"output_mat must be 2 dimensions, but has {len(input_mat.shape)}.")
 
-        input_mats = input_mats.to(self.device)
-        output_mats = output_mats.to(self.device)
+        input_mat = input_mat.to(self.device)
+        output_mat = output_mat.to(self.device)
 
-        max_h = max(input_mats.shape[2], output_mats.shape[2])
-        max_w = max(input_mats.shape[3], output_mats.shape[3])
+        max_h = max(input_mat.shape[2], output_mat.shape[2])
+        max_w = max(input_mat.shape[3], output_mat.shape[3])
 
-        input_mats = F.pad(input_mats, (0, max_w - input_mats.shape[3], 0, max_h - input_mats.shape[2]))        # pylint: disable=C0301
-        output_mats = F.pad(output_mats, (0, max_w - output_mats.shape[3], 0, max_h - output_mats.shape[2]))    # pylint: disable=C0301
+        input_mat = F.pad(input_mat, (0, max_w - input_mat.shape[3], 0, max_h - input_mat.shape[2]))        # pylint: disable=C0301
+        output_mat = F.pad(output_mat, (0, max_w - output_mat.shape[3], 0, max_h - output_mat.shape[2]))    # pylint: disable=C0301
 
         if train:
             self.optimizer.zero_grad()
-            embed_in = self.model(input_mats)
-            embed_out = self.model(output_mats)
+            embed_in = self.model(input_mat)
+            embed_out = self.model(output_mat)
 
             loss = self._calculate_loss(embed_in, embed_out, self.temp)
             loss.backward()
             self.optimizer.step()
         else:
             with torch.no_grad():
-                embed_in = self.model(input_mats)
-                embed_out = self.model(output_mats)
+                embed_in = self.model(input_mat)
+                embed_out = self.model(output_mat)
 
-        # TODO: If final supervised loss of outputs should backpropagate to fix embeddings,
-        # stop detaching embeddings on returning from step function; try stopping detaches
-        # regardless.
         if pair_features:
             embed_pairs = self._pair_embeddings(embed_in, embed_out)
 
             return (
-                embed_in.detach().cpu(),
-                embed_out.detach().cpu(),
-                embed_pairs.detach().cpu()
+                embed_in,
+                embed_out,
+                embed_pairs
             )
 
         return (
-            embed_in.detach().cpu(),
-            embed_out.detach().cpu()
+            embed_in,
+            embed_out
         )
 
 __all__ = [ "MatrixPairEmbedding" ]
