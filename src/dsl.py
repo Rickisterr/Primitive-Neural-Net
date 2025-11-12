@@ -24,6 +24,21 @@ class DSLPrimitives:
             "matrix_mult" : self.__mat_mult
         }
 
+        self.is_loopable = {
+            "matrix_transpose": False,
+            "matrix_concat": True,
+            "matrix_split": True,
+            "matrix_filter_rows": False,
+            "matrix_filter_cols": False,
+            "matrix_pool": True,
+            "matrix_rotate": True,
+            "matrix_reflect": False,
+            "matrix_translate" : True,
+            "matrix_add" : True,
+            "matrix_sub" : True,
+            "matrix_mult" : True
+        }
+
         self.dsl_func = None
         self.update_func(func_keyword)
 
@@ -140,7 +155,7 @@ class DSLPrimitives:
         mask = torch.tensor([predicate(mat[:, i]) for i in range(mat.shape[1])], dtype=torch.bool)
         return mat[:, mask]
 
-    def __mat_pool(self, mat, pool_sz=(2, 2), pool_op="max"):
+    def __mat_pool(self, mat: torch.Tensor, pool_sz=(2, 2), pool_op="max", p=5):
         """
         Method used to pool (max/avg) within non-overlapping blocks.
 
@@ -148,26 +163,21 @@ class DSLPrimitives:
             mat (tensor): Input matrix.
             pool_sz (tuple): Block size (h, w).
             pool_op (str): 'max' or 'avg'.
+            p (int): p value for Lp pooling (only used if pool_op is lp).
 
         Returns:
             tensor: Pooled matrix.
         """
-        if not isinstance(mat, torch.Tensor):
-            raise TypeError("Matrix must be a tensor.")
-        if len(mat.shape) != 2:
-            raise ValueError("Matrix must be 2D.")
+        mat_inp = mat.clone().unsqueeze(0).unsqueeze(0)
 
-        mat_reshaped = mat.unfold(0, pool_sz[0], pool_sz[0]).unfold(1, pool_sz[1], pool_sz[1])
-
-        if pool_op == "max":
-            out = mat_reshaped.contiguous().view(-1, pool_sz[0]*pool_sz[1]).max(dim=1)[0]
-        elif pool_op == "avg":
-            out = mat_reshaped.contiguous().view(-1, pool_sz[0]*pool_sz[1]).mean(dim=1)
+        if pool_op == "avg":
+            pool_out = F.avg_pool2d(mat_inp, pool_sz)       # pylint: disable=E1102
+        elif pool_op == "lp":
+            pool_out = F.lp_pool2d(mat_inp, p, pool_sz)     # pylint: disable=E1102
         else:
-            raise ValueError("pool_op must be 'max' or 'avg'.")
+            pool_out = F.max_pool2d(mat_inp, pool_sz)       # pylint: disable=E1102
 
-        side = int(out.numel() ** 0.5)
-        return out.view(side, side)
+        return pool_out.squeeze(0).squeeze(0)
 
     def __mat_rotate(self, mat, k=1):
         """
@@ -211,7 +221,7 @@ class DSLPrimitives:
         else:
             raise ValueError("Axis must be 'horizontal' or 'vertical'.")
 
-    def __mat_translate(self, mat, translation):
+    def __mat_translate(self, mat, translation=(1, 1)):
         """
         Method used to translate matrices by a certain defined distance.
 

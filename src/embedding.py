@@ -62,13 +62,25 @@ class MatrixPairEmbedding:
         decay_rate (float): Rate of decay for model weights.
         device (str): Whether to use gpu (cuda) for compute or cpu. Default is "cuda".
     """
-    def __init__(self, hidden_dim=128, output_dim=64, lr=1e-4, decay_rate=1e-2, device="cuda"):
+    def __init__(
+        self,
+        hidden_dim=128,
+        output_dim=64,
+        lr=1e-4,
+        decay_rate=1e-2,
+        device="cuda"
+    ):
         self.device = device if torch.cuda.is_available() else "cpu"
         self.model = _MatrixEncoder(hidden_dim=hidden_dim, output_dim=output_dim).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=decay_rate)
         self.temp = 0.1
 
-    def _calculate_loss(self, embed_input: torch.Tensor, embed_output: torch.Tensor, temp=0.1):
+    def _calculate_loss(
+        self,
+        embed_input: torch.Tensor,
+        embed_output: torch.Tensor,
+        temp=0.1
+    ):
         """
         Calculates unsupervised loss to give similar pairs more positive values
         and different pairs more negative values to learn to perform embeddings
@@ -100,7 +112,11 @@ class MatrixPairEmbedding:
 
         return loss
 
-    def _pair_embeddings(self, embed1: torch.Tensor, embed2: torch.Tensor):
+    def _pair_embeddings(
+        self,
+        embed1: torch.Tensor,
+        embed2: torch.Tensor
+    ):
         """
         Returns the compiled embedding for a matrix pair, retaining the features
         of the input and output matrices by themselves as well as the difference
@@ -118,7 +134,12 @@ class MatrixPairEmbedding:
 
         return embed_compiled
 
-    def _preprocess_data(self, input_mat: torch.Tensor, min_val=0, max_val=9):
+    def _preprocess_data(
+        self,
+        input_mat: torch.Tensor,
+        min_val=0,
+        max_val=9
+    ):
         """
         Preprocesses the data before embedding.
 
@@ -135,7 +156,13 @@ class MatrixPairEmbedding:
 
         return input_mat
 
-    def step(self, input_mat: torch.Tensor, output_mat: torch.Tensor, train=True, pair_features=False):       # pylint: disable=C0301
+    def step(
+        self,
+        input_mat: torch.Tensor,
+        output_mat: torch.Tensor,
+        train=True,
+        pair_features=False
+    ):
         """
         Processes one input-output matrix pair to fit to the model and returns the
         individual and paired feature embeddings of the input-output pair.

@@ -21,7 +21,11 @@ class Network:
         hidden_dim (int): Number of channels of embeddings. Default is 128.
         output_dim (int): Number of features per channel in embeddings. Default is 64.
     """
-    def __init__(self, hidden_dim=128, output_dim=64):
+    def __init__(
+        self,
+        hidden_dim=128,
+        output_dim=64
+    ):
         self.embed_model = MatrixPairEmbedding(hidden_dim, output_dim)
 
         self.current_input = None
@@ -47,21 +51,24 @@ class Network:
             alpha (float): Weightage for mismatch in shape contributing to loss. Default is 10.
             beta (float): Weight for mismatch in element values affecting loss. Default is 1.
         """
-        shape_loss = torch.sum((
-            torch.tensor(node_output.shape, dtype=torch.float32)
-            - torch.tensor(final_output.shape, dtype=torch.float32)
-        ) ** 2)
+        shape_loss = ((node_output.size(0) - final_output.size(0))**2 +
+            (node_output.size(1) - final_output.size(1))**2)
 
-        min_h = min(node_output.shape[0], final_output.shape[0])
-        min_w = min(node_output.shape[1], final_output.shape[1])
+        value_loss = F.mse_loss(
+            F.interpolate(node_output.unsqueeze(0).unsqueeze(0),
+                size=final_output.shape, mode="bilinear", align_corners=False).squeeze(),
+            final_output
+        )
 
-        value_loss = torch.mean((
-            node_output[:min_h, :min_w] - final_output[:min_h, :min_w]
-        ) ** 2)
+        loss = alpha * shape_loss + beta * value_loss
 
-        return alpha * shape_loss + beta * value_loss
+        return round(loss.item(), 3)
 
-    def _find_next_node(self, embed: torch.Tensor, next_node_ids: list):
+    def _find_next_node(
+        self,
+        embed: torch.Tensor,
+        next_node_ids: list
+    ):
         """
         Calculates similarity scores between the embedding inputted and the embeddings of all
         nodes present in the network and returns the most similar node object as well as the 
@@ -89,27 +96,37 @@ class Network:
 
         return self.nodes[most_similar_idx], most_similar_idx
 
-    def add_node(self, func_keyword: str, init_node_embed: torch.Tensor, is_chainable=False):
+    def add_node(
+        self,
+        func_keyword: str,
+        example_input: torch.Tensor,
+        is_chainable=False
+    ):
         """
         Appends a new node to the network, given a valid function keyword.
 
         Args:
             func_keyword (str): Keyword name for the new node's DSL defined primitive function.
-            init_node_embed (tensor): Node's feature embedding on initialization.
+            example_input (tensor): Input matrix to help node form its own example to learn from.
             is_chainable (bool): Whether node can pass its output back to itself. Default is False.
         """
+        
+        
         next_nodes = [idx for idx in range(len(self.nodes))]
         if is_chainable:
             next_nodes.append(len(self.nodes))
 
-        new_node = Node(len(self.nodes), next_nodes, func_keyword, init_node_embed)
+        new_node = Node(len(self.nodes), next_nodes, func_keyword, example_input)
         self.nodes.append(new_node)
 
-        self.nodes_embeds_flat.append(init_node_embed.flatten())
+        self.nodes_embeds_flat.append(new_node.get_embedding())
 
         return
 
-    def train_iter(self, max_overfits=5):
+    def train_iter(
+        self,
+        max_overfits=10
+    ):
         """
         One iteration of training the network with a single input-output
         pair of matrices. The input is processed through the network until
@@ -131,7 +148,7 @@ class Network:
             raise TypeError(f"self.current_output must be of type `torch.Tensor`\
                 but is of type `{type(self.current_output)}`.")
 
-        prev_loss = 9999
+        best_loss = 9999
         overfits = 0
         best_output = None
         best_traversed_nodes = None
@@ -139,14 +156,21 @@ class Network:
 
         # TODO: Check if clone() needed for input copy here (can original tensor be changed)
         node_input = self.current_input
-        traversed_nodes = []
+        traversed_nodes = [None]
 
-        while overfits <= max_overfits:
+        while overfits < max_overfits:
             candidate_loss = 9999
             chosen_output, chosen_node = None, None
 
             for cand_id in next_node_candidates:
-                cand_output = self.nodes[cand_id].forward(node_input)
+                if self.nodes[cand_id] == traversed_nodes[-1]:
+                    if self.nodes[cand_id].is_loopable is False:
+                        continue
+
+                cand_output = self.nodes[cand_id].forward(
+                    node_input,
+                    actual_output=self.current_output
+                )
                 loss = self._calculate_output_loss(cand_output, self.current_output)
 
                 if loss < candidate_loss:
@@ -157,15 +181,22 @@ class Network:
             node_input = chosen_output
             traversed_nodes.append(chosen_node)
 
-            if candidate_loss >= prev_loss:
+            print(f"\nLoss for training at node {chosen_node.node_func}: {candidate_loss}.")
+            # print(f"node_input: {node_input}.")
+
+            if candidate_loss >= best_loss:
                 overfits += 1
             else:
                 best_output = chosen_output
                 best_traversed_nodes = traversed_nodes
                 overfits = (overfits - 1) if overfits > 0 else 0
 
+                best_loss = candidate_loss
+
         return (
             best_traversed_nodes,
             best_output,
             self._calculate_output_loss(best_output, self.current_output)
         )
+
+__all__ = [ 'Network' ]
