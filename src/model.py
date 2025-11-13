@@ -5,6 +5,9 @@ import the `Network` class.
 
 FOR NOW, ONLY SUPPORTS SINGLE OPERAND (UNARY) DSL FUNCTIONS
 """
+import os
+import pickle
+import json
 import torch
 import torch.nn.functional as F
 from src.embedding import MatrixPairEmbedding
@@ -34,7 +37,7 @@ class Network:
         self.nodes = []
         self.nodes_embeds_flat = []
 
-    def _calculate_output_loss(
+    def _calculate_weightedMSE_loss(
         self,
         node_output: torch.Tensor,
         final_output: torch.Tensor,
@@ -63,6 +66,123 @@ class Network:
         loss = alpha * shape_loss + beta * value_loss
 
         return round(loss.item(), 3)
+
+    def _calculate_l1_loss(
+        self,
+        node_output: torch.Tensor,
+        final_output: torch.Tensor
+    ):
+        """
+        Calculates the supervised loss between the output at a node during training with the 
+        actual final output of the input-output pair in the dataset.
+
+        Args:
+            node_output (torch.Tensor): Output at a particular node.
+            final_output (torch.Tensor): Actual final output that the network should produce.
+        """
+
+        value_loss = F.smooth_l1_loss(
+            F.interpolate(
+            node_output.unsqueeze(0).unsqueeze(0),
+            size=final_output.shape,
+            mode="bilinear",
+            align_corners=False).squeeze(0).squeeze(0),
+            final_output,
+            beta=0.1
+        )
+
+        return round(value_loss.item(), 3)
+
+    def _calculate_bce_dice_loss(
+        self,
+        node_output: torch.Tensor,
+        final_output: torch.Tensor,
+        alpha=1.0,  # Weight for BCE
+        beta=1.0    # Weight for Dice
+    ):
+        """
+        Calculates combined BCE + Dice loss between a predicted 2D tensor (node_output)
+        and a ground-truth 2D tensor (final_output), handling shape mismatches.
+
+        Args:
+            node_output (torch.Tensor): Predicted 2D tensor.
+            final_output (torch.Tensor): Ground-truth 2D tensor.
+            alpha (float): Weight for BCE loss.
+            beta (float): Weight for Dice loss.
+        """
+        target = final_output
+        pred = torch.sigmoid(F.interpolate(
+            node_output.unsqueeze(0).unsqueeze(0),
+            size=final_output.shape,
+            mode="bilinear",
+            align_corners=False
+        ).squeeze(0).squeeze(0))
+        target = (target - target.min()) / (target.max() - target.min() + 1e-8)
+
+        bce_loss = F.binary_cross_entropy(pred, target)
+
+        smooth = 1e-6
+        intersection = (pred * target).sum()
+        dice_coeff = (2.0 * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+        dice_loss = 1.0 - dice_coeff
+
+        loss = alpha * bce_loss + beta * dice_loss
+
+        return round(loss.item(), 3)
+
+    def _calculate_output_loss(
+        self,
+        node_output: torch.Tensor,
+        final_output: torch.Tensor,
+        loss_op="weighted_mse",
+        **kwargs
+    ):
+        """
+        Calculates the supervised loss between the output at a node during training with the 
+        actual final output of the input-output pair in the dataset.
+
+        Can perform loss operations of `weighted_mse`, `l1`, `bce_dice` when loss_op is set 
+        to any of the listed values.
+
+        Args:
+            node_output (torch.Tensor): Output at a particular node.
+            final_output (torch.Tensor): Actual final output that the network should produce.
+            loss_op (str): Type of loss to apply for network. Default is weighted MSE loss.
+            **kwargs: Keyworded parameters to the loss function.
+        """
+        if loss_op.lower() == "weighted_mse":
+            if "alpha" in kwargs and "beta" in kwargs:
+                return self._calculate_weightedMSE_loss(
+                    node_output,
+                    final_output,
+                    kwargs["alpha"],
+                    kwargs["beta"]
+                )
+            else:
+                return self._calculate_weightedMSE_loss(
+                    node_output,
+                    final_output
+                )
+        elif loss_op.lower() == "l1":
+            return self._calculate_l1_loss(
+                node_output,
+                final_output
+            )
+        elif loss_op.lower() == "bce_dice":
+            if "alpha" in kwargs and "beta" in kwargs:
+                return self._calculate_bce_dice_loss(
+                    node_output,
+                    final_output,
+                    kwargs["alpha"],
+                    kwargs["beta"]
+                )
+            else:
+                return self._calculate_bce_dice_loss(
+                    node_output,
+                    final_output
+                )
+        else:
+            raise ValueError(f"loss_op value {loss_op} does not exist.")
 
     def _find_next_node(
         self,
@@ -110,8 +230,6 @@ class Network:
             example_input (tensor): Input matrix to help node form its own example to learn from.
             is_chainable (bool): Whether node can pass its output back to itself. Default is False.
         """
-        
-        
         next_nodes = [idx for idx in range(len(self.nodes))]
         if is_chainable:
             next_nodes.append(len(self.nodes))
@@ -148,7 +266,7 @@ class Network:
             raise TypeError(f"self.current_output must be of type `torch.Tensor`\
                 but is of type `{type(self.current_output)}`.")
 
-        best_loss = 9999
+        best_loss = 9999999
         overfits = 0
         best_output = None
         best_traversed_nodes = None
@@ -159,7 +277,7 @@ class Network:
         traversed_nodes = [None]
 
         while overfits < max_overfits:
-            candidate_loss = 9999
+            candidate_loss = 9999999
             chosen_output, chosen_node = None, None
 
             for cand_id in next_node_candidates:
@@ -171,18 +289,21 @@ class Network:
                     node_input,
                     actual_output=self.current_output
                 )
-                loss = self._calculate_output_loss(cand_output, self.current_output)
+                loss = self._calculate_output_loss(cand_output, self.current_output, "l1")
 
                 if loss < candidate_loss:
                     candidate_loss = loss
                     chosen_output = cand_output
                     chosen_node = self.nodes[cand_id]
 
+            chosen_node.forward(
+                node_input,
+                actual_output=self.current_output,
+                train=True
+            )
+
             node_input = chosen_output
             traversed_nodes.append(chosen_node)
-
-            print(f"\nLoss for training at node {chosen_node.node_func}: {candidate_loss}.")
-            # print(f"node_input: {node_input}.")
 
             if candidate_loss >= best_loss:
                 overfits += 1
@@ -196,7 +317,102 @@ class Network:
         return (
             best_traversed_nodes,
             best_output,
-            self._calculate_output_loss(best_output, self.current_output)
+            best_loss
         )
+
+    def train(
+        self,
+        epochs=10,
+        training_dir="./data/ARC-AGI-2-main/data/training/",
+        batch_verbose=False
+    ):
+        """
+        Method used to train the network model and update its embeddings accordingly.
+
+        Args:
+            epochs (int): Number of epochs to run training for.
+            training_dir (str, optional): Relative folder location to all training examples.
+            batch_verbose (bool): Whether to display loss for each batch individually.
+        """
+        if os.path.exists(training_dir) and os.path.isdir(training_dir):
+            filenames = os.listdir(training_dir)
+        else:
+            raise NotADirectoryError(f"{training_dir} does not exist or is not a folder location.")
+
+        if len(filenames) == 0:
+            raise FileNotFoundError(f"No files found at location {training_dir}.")
+
+        if len(self.nodes) <= 2:
+            raise RuntimeError(f"List of nodes in network too small: {len(self.nodes)} present.")
+
+        for epoch in range(epochs):
+            epoch_loss = 0
+
+            for filename in filenames:
+                iter_loss = 0
+
+                with open(os.path.join(training_dir, filename), "rb") as file:
+                    data = json.load(file)
+                    file.close()
+
+                for example in data["train"]:
+                    self.current_input = torch.tensor(example["input"], dtype=torch.float32)
+                    self.current_output = torch.tensor(example["output"], dtype=torch.float32)
+
+                    _, _, example_loss = self.train_iter()
+                    iter_loss += example_loss
+
+                iter_loss = iter_loss / len(data["train"])
+                iter_loss = round(iter_loss, 3)
+                epoch_loss += iter_loss
+                if batch_verbose:
+                    print(f"Batch loss for task {filename.split(".")[0]}: {iter_loss}")
+
+            epoch_loss = epoch_loss / len(filenames)
+            epoch_loss = round(epoch_loss, 3)
+            print(f"\nEpoch {epoch+1}/{epochs}: loss - {epoch_loss}")
+
+        self.save_model()
+
+        return
+
+    def save_model(self, path="saves/"):
+        """
+        Method to save model state as a pickle file so it can be reused
+        later without training from scratch.
+
+        Args:
+            path (str, optional): Path to folder to save model to. Defaults to "saves/".
+        """
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if len(os.listdir(path)) != 0:
+            filename = f"model_{len(os.listdir(path))}.pkl"
+        else:
+            filename = "model.pkl"
+
+        path = os.path.join(path, filename)
+
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+            f.close()
+
+        print(f"Model saved to {path}.")
+        return
+
+    @classmethod
+    def load_model(cls, path="saves/model.pkl"):
+        """
+        Loads a previously saved model object and returns it to a receiving
+        variable.
+
+        Args:
+            path (str, optional): Path to folder with the model saved in it.
+        """
+        with open(path, "rb") as f:
+            model = pickle.load(f)
+            f.close()
+
+        print(f"Model loaded from {path}.")
+        return model
 
 __all__ = [ 'Network' ]

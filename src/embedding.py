@@ -132,7 +132,7 @@ class MatrixPairEmbedding:
         embed_compiled = torch.cat([embed1, embed2, embed1 - embed2], dim=-1)
         embed_compiled = F.normalize(embed_compiled, dim=-1)
 
-        return embed_compiled
+        return embed_compiled.detach()
 
     def _preprocess_data(
         self,
@@ -199,7 +199,7 @@ class MatrixPairEmbedding:
         output_mat = F.pad(output_mat, (0, max_w - output_mat.shape[3], 0, max_h - output_mat.shape[2]))    # pylint: disable=C0301
 
         if train:
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             embed_in = self.model(input_mat)
             embed_out = self.model(output_mat)
 

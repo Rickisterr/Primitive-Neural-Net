@@ -31,7 +31,7 @@ class Node:
         self.node_id = node_id
         self.node_func = dsl_keyword
         self.next_nodes = next_node_ids
-        self.__node_embed_model = MatrixPairEmbedding()
+        self.node_embed_model = MatrixPairEmbedding()
 
         self.dsl_func = None
         self.is_loopable = False
@@ -44,13 +44,13 @@ class Node:
                 f"but is of type `{type(example_output)}`."
             )
 
-        self.__feature_embed = self.__node_embed_model.step(
+        self.__feature_embed = self.node_embed_model.step(
             example_input,
             example_output,
             pair_features=True
         )[2]
 
-    def _update_embedding(
+    def update_embedding(
         self,
         pair_embedding: torch.Tensor,
         eps=1e-8
@@ -72,8 +72,8 @@ class Node:
         feature_embed_shape = self.__feature_embed.shape
         pair_embed_shape = pair_embedding.shape
 
-        pair_embedding = pair_embedding.reshape(1, -1)
-        self.__feature_embed = self.__feature_embed.reshape(-1, 1)
+        pair_embedding = pair_embedding.detach().reshape(1, -1)
+        self.__feature_embed = self.__feature_embed.detach().reshape(-1, 1)
 
         similarity = torch.mm(pair_embedding, self.__feature_embed) / (
             torch.norm(pair_embedding) * torch.norm(self.__feature_embed) + eps
@@ -196,14 +196,15 @@ class Node:
         if output is None:
             return mat
 
-        pair_embed = self.__node_embed_model.step(
-            mat,
-            actual_output,
-            train=train,
-            pair_features=True
-        )[2]
+        if train:
+            pair_embed = self.node_embed_model.step(
+                mat,
+                actual_output,
+                train=train,
+                pair_features=True
+            )[2]
 
-        self._update_embedding(pair_embed)
+            self.update_embedding(pair_embed)
 
         return output
 

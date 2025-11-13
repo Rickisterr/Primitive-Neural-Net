@@ -16,6 +16,7 @@ class DSLPrimitives:
             "matrix_filter_rows": self.__mat_filter_rows,
             "matrix_filter_cols": self.__mat_filter_cols,
             "matrix_pool": self.__mat_pool,
+            "matrix_unpool": self.__mat_unpool,
             "matrix_rotate": self.__mat_rotate,
             "matrix_reflect": self.__mat_reflect,
             "matrix_translate" : self.__mat_translate,
@@ -31,6 +32,7 @@ class DSLPrimitives:
             "matrix_filter_rows": False,
             "matrix_filter_cols": False,
             "matrix_pool": True,
+            "matrix_unpool": True,
             "matrix_rotate": True,
             "matrix_reflect": False,
             "matrix_translate" : True,
@@ -179,6 +181,32 @@ class DSLPrimitives:
 
         return pool_out.squeeze(0).squeeze(0)
 
+    def __mat_unpool(self, mat: torch.Tensor, pool_sz=(2, 2), pool_op="max", p=5):
+        """
+        Method used to reverse pooling (unpool/upscale) by enlarging the matrix.
+
+        Args:
+            mat (tensor): Input pooled matrix.
+            pool_sz (tuple): Block size (h, w) used during pooling.
+            pool_op (str): 'max', 'avg', or 'lp' (affects interpolation mode).
+            p (int): p value for Lp unpooling (not directly used but kept for symmetry).
+
+        Returns:
+            tensor: Upscaled (unpooled) matrix.
+        """
+        mat_inp = mat.clone().unsqueeze(0).unsqueeze(0)
+
+        if pool_op == "avg":
+            mode = "bilinear"
+        elif pool_op == "lp":
+            mode = "bicubic"
+        else:
+            mode = "nearest"
+
+        unpool_out = F.interpolate(mat_inp, scale_factor=pool_sz, mode=mode, align_corners=False if mode != "nearest" else None)
+
+        return unpool_out.squeeze(0).squeeze(0)
+
     def __mat_rotate(self, mat, k=1):
         """
         Method used to rotate a matrix by 90 degrees k times.
@@ -240,6 +268,7 @@ class DSLPrimitives:
             raise TypeError(f"Argument passed to dsl primitive must be of type 'tuple' \
                 but is of type '{type(translation)}'.")
 
+        original_shape = mat.shape
         shift = [0, 0, 0, 0]
 
         if translation[0] < 0:
@@ -253,6 +282,7 @@ class DSLPrimitives:
             shift[3] = translation[1]
 
         translated = F.pad(mat, shift)
+        translated = translated[:original_shape[0], :original_shape[1]]
 
         return translated
 
