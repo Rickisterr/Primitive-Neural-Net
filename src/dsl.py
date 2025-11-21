@@ -181,7 +181,7 @@ class DSLPrimitives:
 
         return pool_out.squeeze(0).squeeze(0)
 
-    def __mat_unpool(self, mat: torch.Tensor, pool_sz=(2, 2), pool_op="max", p=5):
+    def __mat_unpool(self, mat: torch.Tensor, pool_sz=(2, 2), pool_op="max"):
         """
         Method used to reverse pooling (unpool/upscale) by enlarging the matrix.
 
@@ -189,7 +189,6 @@ class DSLPrimitives:
             mat (tensor): Input pooled matrix.
             pool_sz (tuple): Block size (h, w) used during pooling.
             pool_op (str): 'max', 'avg', or 'lp' (affects interpolation mode).
-            p (int): p value for Lp unpooling (not directly used but kept for symmetry).
 
         Returns:
             tensor: Upscaled (unpooled) matrix.
@@ -203,7 +202,12 @@ class DSLPrimitives:
         else:
             mode = "nearest"
 
-        unpool_out = F.interpolate(mat_inp, scale_factor=pool_sz, mode=mode, align_corners=False if mode != "nearest" else None)
+        unpool_out = F.interpolate(
+            mat_inp,
+            scale_factor=pool_sz,
+            mode=mode,
+            align_corners=False if mode != "nearest" else None
+        )
 
         return unpool_out.squeeze(0).squeeze(0)
 

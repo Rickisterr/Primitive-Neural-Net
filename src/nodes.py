@@ -13,25 +13,23 @@ class Node:
 
     Args:
         node_id (int): ID by which to identify this particular node.
-        next_node_ids (list): Array of nodes current one can pass output to.
         dsl_keyword (str): DSL name for this node as determined by a function.
         example_input (tensor): Example tensor to initialize embedding with.
+        embed_model (MatrixPairEmbedding): Model being used to calculate node embeddings.
         *args: Indexable arguments passed to dsl function.
         **kwargs: Keyworded arguments passed to dsl function.
     """
     def __init__(
         self,
         node_id: int,
-        next_node_ids: list,
         dsl_keyword: str,
         example_input: torch.Tensor,
+        embed_model: MatrixPairEmbedding,
         *args,
         **kwargs
     ):
         self.node_id = node_id
         self.node_func = dsl_keyword
-        self.next_nodes = next_node_ids
-        self.node_embed_model = MatrixPairEmbedding()
 
         self.dsl_func = None
         self.is_loopable = False
@@ -44,7 +42,7 @@ class Node:
                 f"but is of type `{type(example_output)}`."
             )
 
-        self.__feature_embed = self.node_embed_model.step(
+        self.__feature_embed = embed_model.step(
             example_input,
             example_output,
             pair_features=True
@@ -53,7 +51,8 @@ class Node:
     def update_embedding(
         self,
         pair_embedding: torch.Tensor,
-        eps=1e-8
+        loss_value: float,
+        stability_factor=1.0
     ):
         """
         Class method to update the feature embedding representing the overall
@@ -62,6 +61,8 @@ class Node:
 
         Args:
             pair_embedding (tensor): Pair embedding of this node's input and final output.
+            loss_value (float): Loss value of the node on this pair.
+            stability_factor (float): Small value to avoid division by zero.
 
         Returns:
             None
@@ -69,21 +70,14 @@ class Node:
         if pair_embedding.shape != self.__feature_embed.shape:
             raise ValueError(f"pair_embedding shape {pair_embedding.shape} must be {self.__feature_embed.shape}")       # pylint: disable=C0301
 
-        feature_embed_shape = self.__feature_embed.shape
-        pair_embed_shape = pair_embedding.shape
+        pair_embedding = pair_embedding.detach()
+        self.__feature_embed = self.__feature_embed.detach()
 
-        pair_embedding = pair_embedding.detach().reshape(1, -1)
-        self.__feature_embed = self.__feature_embed.detach().reshape(-1, 1)
-
-        similarity = torch.mm(pair_embedding, self.__feature_embed) / (
-            torch.norm(pair_embedding) * torch.norm(self.__feature_embed) + eps
-        )
-        alpha = torch.clamp(similarity, 0, 1)
+        alpha = loss_value / (loss_value + stability_factor)
 
         # Updating node's feature embedding
-        self.__feature_embed = self.__feature_embed.reshape(feature_embed_shape)
-        pair_embedding = pair_embedding.reshape(pair_embed_shape)
         self.__feature_embed = alpha * pair_embedding + (1 - alpha) * self.__feature_embed
+        # print(f"{self.node_func}: {self.__feature_embed[0, 3, 0, :2]}")    # Debug print
 
         return
 
@@ -165,7 +159,6 @@ class Node:
         mat,
         mat_2=None,
         actual_output=None,
-        train=False,
         **kwargs
     ):
         """
@@ -175,7 +168,6 @@ class Node:
             mat (tensor): Main tensor input for this node.
             mat_2 (tensor): Secondary tensor input for this node if needed. None if unary function.
             actual_output (tensor): Actual output of the entire network to compare to.
-            train (bool): Whether to train node's embedding model on this or not.
             **kwargs: Keyworded arguments passed (config related options).
 
         Returns:
@@ -195,16 +187,6 @@ class Node:
         # If primitive function returns None (function cannot be run on this input(s)), skip node
         if output is None:
             return mat
-
-        if train:
-            pair_embed = self.node_embed_model.step(
-                mat,
-                actual_output,
-                train=train,
-                pair_features=True
-            )[2]
-
-            self.update_embedding(pair_embed)
 
         return output
 
